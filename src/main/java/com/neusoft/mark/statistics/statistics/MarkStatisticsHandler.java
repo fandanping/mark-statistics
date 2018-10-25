@@ -5,8 +5,11 @@ import com.neusipo.domain.SortData;
 import com.neusipo.domain.SortResult;
 import com.neusipo.utils.ConPool;
 import com.neusoft.jszk.statistics.SortStatistics;
+import com.neusoft.jszk.statistics.service.ElasticIndexHandler;
 import com.neusoft.mark.statistics.statistics.utils.DBUtil;
 import com.neusoft.mark.statistics.statistics.utils.IDGenerator;
+import org.elasticsearch.client.transport.TransportClient;
+
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -14,18 +17,22 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 统计demo
+ * 类说明：统计demo
  */
 public class MarkStatisticsHandler {
     /**
      * 统计方法业务逻辑
      */
     public static void validate() {
-        //1. 获取数据库连接
+        //1. 获取连接
+        //1.1 获取数据库连接
         Connection conn= DBUtil.getConnection();
-        SortController sortController = new SortController();
         PreparedStatement ps=null;
         ResultSet rs=null;
+        //1.2 获取统计服务连接
+        TransportClient client= ElasticIndexHandler.getTransportClient();
+        //1.3 获取trs接口连接
+        SortController sortController = new SortController();
         try {
             //2. 查询标引词构成的检索式
             String sql="select * from sipo_mp_ti_mark";
@@ -33,19 +40,19 @@ public class MarkStatisticsHandler {
             rs=ps.executeQuery();
             //2.1 遍历2 结果集
             while(rs.next()){
-                         System.out.println("test");
+                        String insertsql="";
+                        String id= IDGenerator.generate();
                         String an=rs.getString(4);
                         String word=rs.getString(5);
                         String citedAn=rs.getString(7);
                         TrsResult trsResult = new TrsResult();
-                        System.out.println("test11");
                         //3. 拿标引词构成的检索式到trs检索，获取文献结果集
                         List<Map<String,Object>> resSearchResult=trsResult.getTRSResult(word);
-
-                        String insertsql="";
-                        String id= IDGenerator.generate();
                         //4. 将文献结果集（an,ipc）调用统计服务接口，返回出现频次最多的前十ipc分类号
-                        Map<String,Integer> esSearchResult= SortStatistics.getIpcSort(resSearchResult);
+                        long startTime = System.currentTimeMillis();
+                        Map<String,Integer> esSearchResult= SortStatistics.getIpcSort(resSearchResult,client);
+                        long endTime = System.currentTimeMillis();
+                        System.out.println("程序运行时间：" + (endTime - startTime) + "ms");    //输出程序运行时间
                         System.out.println(esSearchResult);
                         //4.1 遍历统计服务返回的结果集，拼接ic检索式
                         String ipckeyword=" IC=(";
@@ -53,17 +60,11 @@ public class MarkStatisticsHandler {
                         for (Map.Entry<String, Integer> entry : esSearchResult.entrySet()) {
                             System.out.println(entry.getKey() + ":" + entry.getValue());
                             if(count<10){
-                                if(entry.getKey().length()!=0){
                                     ipckeyword +="'"+ entry.getKey()+"'"+" or ";
                                     count++;
-                                }else{
-                                    continue;
-                                }
                             }else if(count ==10){
                                 ipckeyword +="'" +entry.getKey()+"'"+" ) ";
                                 count++;
-                            }else if(count>10){
-                                break;
                             }
                         }
                         //5. 构建关键词和ic最终的检索式
@@ -71,7 +72,6 @@ public class MarkStatisticsHandler {
                         System.out.println(keyword);
                         //6. 拿5.构建的检索式再次到trs检索;如果结果集为0 和大于1000的直接返回，不调用排序服务；只有结果集在0-1000之间的才调用排序服务
                         List<Map<String,Object>> resSearchResultSecond=trsResult.getTRSResult(keyword);
-                        System.out.println("1212");
                         if(resSearchResultSecond.size() ==0 ||resSearchResultSecond.size()>1000){
                             continue;
                         }else{
@@ -88,9 +88,7 @@ public class MarkStatisticsHandler {
                             SortResult sortResult=null;
                             try {
                                 sortResult = sortController.getSortResult(queryAns, an, citedAn);
-                                System.out.println("aaa111");
                             }catch (Exception e) {
-                                System.out.println("aaa222");
                                 continue;
                             }
                             //9. 遍历排序结果集，插入数据库
@@ -115,6 +113,7 @@ public class MarkStatisticsHandler {
             //10. 关闭连接
             //10.1 关闭trs连接
             ConPool.close();
+            //ElasticIndexHandler.close(client);
             //10.2 关闭数据库连接
             DBUtil.release(conn, ps, rs);
         }
